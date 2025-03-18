@@ -111,7 +111,7 @@ public class OrderService {
         dto.setId(order.getId());
         dto.setUserId(order.getUser().getId());
         dto.setOrderDate(order.getOrderDate());
-        dto.setStatus(order.getStatus().name());
+        dto.setStatus(order.getStatus());
         dto.setTotalAmount(order.getTotalAmount());
         
         List<OrderItemDTO> itemDTOs = order.getOrderItems().stream()
