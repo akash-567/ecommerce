@@ -4,6 +4,7 @@ import com.example.ecommerce.dto.OrderDTO;
 import com.example.ecommerce.dto.OrderItemDTO;
 import com.example.ecommerce.model.Order;
 import com.example.ecommerce.model.OrderItem;
+import com.example.ecommerce.model.OrderStatusMessage;
 import com.example.ecommerce.model.Product;
 import com.example.ecommerce.model.User;
 import com.example.ecommerce.repository.OrderRepository;
@@ -15,6 +16,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -25,6 +27,7 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
+    private final OrderMessageProducer messageProducer;
 
     @Transactional
     public OrderDTO createOrder(OrderDTO orderDTO, UserDetails userDetails) {
@@ -39,6 +42,17 @@ public class OrderService {
         
         calculateTotalAmount(order);
         Order savedOrder = orderRepository.save(order);
+
+        // Send status update message
+        OrderStatusMessage statusMessage = new OrderStatusMessage();
+        statusMessage.setOrderId(savedOrder.getId());
+        statusMessage.setStatus(savedOrder.getStatus().name());
+        statusMessage.setMessage("Your order has been received and is being processed.");
+        statusMessage.setTimestamp(LocalDateTime.now());
+        statusMessage.setCustomerEmail(savedOrder.getUser().getEmail());
+        
+        messageProducer.sendOrderStatusUpdate(statusMessage);
+
         return convertToDTO(savedOrder);
     }
 
@@ -97,7 +111,7 @@ public class OrderService {
         dto.setId(order.getId());
         dto.setUserId(order.getUser().getId());
         dto.setOrderDate(order.getOrderDate());
-        dto.setStatus(order.getStatus());
+        dto.setStatus(order.getStatus().name());
         dto.setTotalAmount(order.getTotalAmount());
         
         List<OrderItemDTO> itemDTOs = order.getOrderItems().stream()
@@ -115,5 +129,26 @@ public class OrderService {
         dto.setQuantity(item.getQuantity());
         dto.setPrice(item.getPrice());
         return dto;
+    }
+
+    @Transactional
+    public Order updateOrderStatus(Long id, Order.OrderStatus status) {
+        Order order = orderRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Order not found: " + id));
+        
+        order.setStatus(status);
+        Order updatedOrder = orderRepository.save(order);
+
+        // Send status update message
+        OrderStatusMessage statusMessage = new OrderStatusMessage();
+        statusMessage.setOrderId(updatedOrder.getId());
+        statusMessage.setStatus(status.name());
+        statusMessage.setMessage("Your order status has been updated.");
+        statusMessage.setTimestamp(LocalDateTime.now());
+        statusMessage.setCustomerEmail(updatedOrder.getUser().getEmail());
+        
+        messageProducer.sendOrderStatusUpdate(statusMessage);
+
+        return updatedOrder;
     }
 } 
