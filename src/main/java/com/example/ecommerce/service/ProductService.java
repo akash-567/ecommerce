@@ -5,9 +5,13 @@ import com.example.ecommerce.model.Product;
 import com.example.ecommerce.repository.ProductRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -17,20 +21,30 @@ public class ProductService {
     
     private final ProductRepository productRepository;
 
-    public List<ProductDTO> getAllProducts() {
-        return productRepository.findAll().stream()
-                .map(this::convertToDTO)
-                .collect(Collectors.toList());
+    @Transactional(readOnly = true)
+    public Page<ProductDTO> getAllProducts(Pageable pageable) {
+        return productRepository.findAll(pageable)
+                .map(this::convertToDTO);
     }
 
+    public Page<ProductDTO> searchProducts(String keyword, Pageable pageable) {
+        if (!StringUtils.hasText(keyword)) {
+            return getAllProducts(pageable);
+        }
+        return productRepository.findByNameContainingIgnoreCaseOrDescriptionContainingIgnoreCase(keyword, keyword, pageable)
+                .map(this::convertToDTO);
+    }
+
+    @Transactional(readOnly = true)
     public ProductDTO getProduct(Long id) {
         return productRepository.findById(id)
                 .map(this::convertToDTO)
-                .orElseThrow(() -> new EntityNotFoundException("Product not found"));
+                .orElseThrow(() -> new EntityNotFoundException("Product not found with id: " + id));
     }
 
     @Transactional
     public ProductDTO createProduct(ProductDTO productDTO) {
+        validateProduct(productDTO);
         Product product = convertToEntity(productDTO);
         Product savedProduct = productRepository.save(product);
         return convertToDTO(savedProduct);
@@ -38,8 +52,9 @@ public class ProductService {
 
     @Transactional
     public ProductDTO updateProduct(Long id, ProductDTO productDTO) {
+        validateProduct(productDTO);
         Product product = productRepository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("Product not found"));
+                .orElseThrow(() -> new EntityNotFoundException("Product not found with id: " + id));
         
         updateProductFromDTO(product, productDTO);
         Product updatedProduct = productRepository.save(product);
@@ -48,21 +63,34 @@ public class ProductService {
 
     @Transactional
     public void deleteProduct(Long id) {
-        if (!productRepository.existsById(id)) {
-            throw new EntityNotFoundException("Product not found");
-        }
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Product not found with id: " + id));
         productRepository.deleteById(id);
     }
 
+    private void validateProduct(ProductDTO productDTO) {
+        if (!StringUtils.hasText(productDTO.getName())) {
+            throw new IllegalStateException("Product name is required");
+        }
+
+        if (productDTO.getPrice() == null || productDTO.getPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Product price must be greater than zero");
+        }
+
+        if (productDTO.getStockQuantity() < 0) {
+            throw new IllegalStateException("Stock quantity cannot be negative");
+        }
+    }
+
     private ProductDTO convertToDTO(Product product) {
-        ProductDTO dto = new ProductDTO();
-        dto.setId(product.getId());
-        dto.setName(product.getName());
-        dto.setDescription(product.getDescription());
-        dto.setPrice(product.getPrice());
-        dto.setImageUrl(product.getImageUrl());
-        dto.setStockQuantity(product.getStockQuantity());
-        return dto;
+        return ProductDTO.builder()
+                .id(product.getId())
+                .name(product.getName())
+                .description(product.getDescription())
+                .price(product.getPrice())
+                .imageUrl(product.getImageUrl())
+                .stockQuantity(product.getStockQuantity())
+                .build();
     }
 
     private Product convertToEntity(ProductDTO dto) {

@@ -1,29 +1,39 @@
 package com.example.ecommerce.model;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
+import jakarta.persistence.*;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 @Data
 @Entity
+@Table(name = "products")
 public class Product {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @NotBlank(message = "Product name is required")
+    @Column(nullable = false)
     private String name;
 
     private String description;
 
-    @Positive(message = "Price must be positive")
-    private Double price;
+    @NotNull(message = "Price is required")
+    @Min(value = 0, message = "Price must be greater than or equal to zero")
+    @Column(precision = 10, scale = 2, nullable = false)
+    private BigDecimal price;
 
     private String imageUrl;
 
-    private Integer stockQuantity;
+    @Min(value = 0, message = "Stock quantity cannot be negative")
+    @Column(nullable = false)
+    private Integer stockQuantity = 0;
+
+    @OneToMany(mappedBy = "product")
+    private List<OrderItem> orderItems = new ArrayList<>();
 } 

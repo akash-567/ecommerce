@@ -13,11 +13,14 @@ import com.example.ecommerce.repository.UserRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,8 +37,15 @@ public class OrderService {
         User user = userRepository.findByUsername(userDetails.getUsername())
                 .orElseThrow(() -> new EntityNotFoundException("User not found"));
 
+        if (orderDTO.getOrderItems() == null || orderDTO.getOrderItems().isEmpty()) {
+            throw new IllegalStateException("Order must contain at least one item");
+        }
+
         Order order = new Order();
         order.setUser(user);
+        order.setOrderNumber(generateOrderNumber());
+        order.setOrderDate(LocalDateTime.now());
+        order.setStatus(Order.OrderStatus.PENDING);
         order.setOrderItems(orderDTO.getOrderItems().stream()
                 .map(itemDTO -> createOrderItem(itemDTO))
                 .collect(Collectors.toList()));
@@ -43,15 +53,20 @@ public class OrderService {
         calculateTotalAmount(order);
         Order savedOrder = orderRepository.save(order);
 
-        // Send status update message
-        OrderStatusMessage statusMessage = new OrderStatusMessage();
-        statusMessage.setOrderId(savedOrder.getId());
-        statusMessage.setStatus(savedOrder.getStatus().name());
-        statusMessage.setMessage("Your order has been received and is being processed.");
-        statusMessage.setTimestamp(LocalDateTime.now());
-        statusMessage.setCustomerEmail(savedOrder.getUser().getEmail());
-        
-        messageProducer.sendOrderStatusUpdate(statusMessage);
+        try {
+            // Send status update message
+            OrderStatusMessage statusMessage = new OrderStatusMessage();
+            statusMessage.setOrderId(savedOrder.getId());
+            statusMessage.setStatus(savedOrder.getStatus().name());
+            statusMessage.setMessage("Your order has been received and is being processed.");
+            statusMessage.setTimestamp(LocalDateTime.now());
+            statusMessage.setCustomerEmail(savedOrder.getUser().getEmail());
+            
+            messageProducer.sendOrderStatusUpdate(statusMessage);
+        } catch (Exception e) {
+            // Log the error but don't fail the order creation
+            // TODO: Implement proper logging
+        }
 
         return convertToDTO(savedOrder);
     }
@@ -80,11 +95,19 @@ public class OrderService {
     }
 
     private OrderItem createOrderItem(OrderItemDTO itemDTO) {
+        if (itemDTO.getQuantity() <= 0) {
+            throw new IllegalStateException("Quantity must be greater than zero");
+        }
+
         Product product = productRepository.findById(itemDTO.getProductId())
                 .orElseThrow(() -> new EntityNotFoundException("Product not found"));
 
         if (product.getStockQuantity() < itemDTO.getQuantity()) {
             throw new IllegalStateException("Insufficient stock for product: " + product.getName());
+        }
+
+        if (product.getPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Product price must be greater than zero");
         }
 
         OrderItem orderItem = new OrderItem();
@@ -100,15 +123,20 @@ public class OrderService {
     }
 
     private void calculateTotalAmount(Order order) {
-        double total = order.getOrderItems().stream()
-                .mapToDouble(item -> item.getPrice() * item.getQuantity())
-                .sum();
+        BigDecimal total = order.getOrderItems().stream()
+                .map(item -> item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         order.setTotalAmount(total);
+    }
+
+    private String generateOrderNumber() {
+        return "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 
     private OrderDTO convertToDTO(Order order) {
         OrderDTO dto = new OrderDTO();
         dto.setId(order.getId());
+        dto.setOrderNumber(order.getOrderNumber());
         dto.setUserId(order.getUser().getId());
         dto.setOrderDate(order.getOrderDate());
         dto.setStatus(order.getStatus());
@@ -132,23 +160,36 @@ public class OrderService {
     }
 
     @Transactional
-    public Order updateOrderStatus(Long id, Order.OrderStatus status) {
+    public OrderDTO updateOrderStatus(Long id, Order.OrderStatus status, UserDetails userDetails) {
         Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Order not found: " + id));
+            .orElseThrow(() -> new EntityNotFoundException("Order not found with id: " + id));
+        
+        // Check if user has admin role
+        boolean isAdmin = userDetails.getAuthorities().stream()
+            .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        
+        if (!isAdmin) {
+            throw new AccessDeniedException("Only admins can update order status");
+        }
         
         order.setStatus(status);
         Order updatedOrder = orderRepository.save(order);
-
-        // Send status update message
-        OrderStatusMessage statusMessage = new OrderStatusMessage();
-        statusMessage.setOrderId(updatedOrder.getId());
-        statusMessage.setStatus(status.name());
-        statusMessage.setMessage("Your order status has been updated.");
-        statusMessage.setTimestamp(LocalDateTime.now());
-        statusMessage.setCustomerEmail(updatedOrder.getUser().getEmail());
+        messageProducer.sendOrderStatusChangedMessage(updatedOrder);
         
-        messageProducer.sendOrderStatusUpdate(statusMessage);
+        return convertToDTO(updatedOrder);
+    }
 
-        return updatedOrder;
+    private void validateStatusTransition(Order.OrderStatus currentStatus, Order.OrderStatus newStatus) {
+        if (currentStatus == Order.OrderStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot update status of a cancelled order");
+        }
+
+        if (currentStatus == Order.OrderStatus.DELIVERED) {
+            throw new IllegalStateException("Cannot update status of a delivered order");
+        }
+
+        if (newStatus == Order.OrderStatus.CANCELLED && currentStatus != Order.OrderStatus.PENDING) {
+            throw new IllegalStateException("Can only cancel orders in PENDING status");
+        }
     }
 } 

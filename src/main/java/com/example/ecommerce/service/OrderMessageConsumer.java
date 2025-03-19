@@ -19,6 +19,11 @@ public class OrderMessageConsumer {
     public void handleOrderStatusUpdate(OrderStatusMessage message) {
         log.info("Received order status update: {}", message);
         
+        if (message.getCustomerEmail() == null) {
+            log.warn("Cannot send email notification for order #{} - customer email is null", message.getOrderId());
+            return;
+        }
+
         // Send email notification
         SimpleMailMessage emailMessage = new SimpleMailMessage();
         emailMessage.setTo(message.getCustomerEmail());
